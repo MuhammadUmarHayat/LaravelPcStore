@@ -1,0 +1,319 @@
+Integrating Stripe and PayPal into your Laravel application involves several steps. Here's a basic guide to get you started with both.
+
+### Step 1: Install Required Packages
+First, you need to install the required packages for Stripe and PayPal.
+
+```bash
+composer require stripe/stripe-php
+composer require srmklive/paypal
+```
+
+### Step 2: Configure Stripe
+#### 2.1 Add Stripe Keys to .env
+Add your Stripe API keys to your `.env` file.
+
+```env
+STRIPE_KEY=your_stripe_public_key
+STRIPE_SECRET=your_stripe_secret_key
+```
+
+#### 2.2 Update Services Configuration
+Add the Stripe configuration to the `config/services.php` file.
+
+```php
+'stripe' => [
+    'key' => env('STRIPE_KEY'),
+    'secret' => env('STRIPE_SECRET'),
+],
+```
+
+#### 2.3 Create a Stripe Controller
+Create a controller to handle Stripe payments.
+
+```php
+php artisan make:controller StripeController
+```
+
+#### 2.4 Add Stripe Payment Logic
+Update the `StripeController` with the payment logic.
+
+```php
+// StripeController.php
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Stripe\Stripe;
+use Stripe\Charge;
+use Auth;
+
+class StripeController extends Controller
+{
+    public function handlePost(Request $request)
+    {
+        Stripe::setApiKey(env('STRIPE_SECRET'));
+
+        $charge = Charge::create([
+            'amount' => $request->amount * 100, // Amount in cents
+            'currency' => 'usd',
+            'description' => 'Order Payment',
+            'source' => $request->stripeToken,
+            'receipt_email' => Auth::user()->email,
+        ]);
+
+        // You can add code to save the order details in your database
+
+        return back()->with('success', 'Payment successful!');
+    }
+}
+```
+
+#### 2.5 Create a Stripe Payment Form
+Create a Blade view for the Stripe payment form.
+
+```html
+<!-- resources/views/stripe.blade.php -->
+@extends('layouts.app')
+
+@section('content')
+    <h1>Stripe Payment</h1>
+
+    <form action="{{ route('stripe.post') }}" method="post" id="payment-form">
+        @csrf
+        <div class="form-row">
+            <label for="card-element">
+                Credit or debit card
+            </label>
+            <div id="card-element">
+                <!-- A Stripe Element will be inserted here. -->
+            </div>
+
+            <!-- Used to display form errors. -->
+            <div id="card-errors" role="alert"></div>
+        </div>
+
+        <button type="submit">Submit Payment</button>
+    </form>
+@endsection
+
+@section('scripts')
+    <script src="https://js.stripe.com/v3/"></script>
+    <script>
+        var stripe = Stripe('{{ env('STRIPE_KEY') }}');
+        var elements = stripe.elements();
+
+        var style = {
+            base: {
+                color: '#32325d',
+                lineHeight: '18px',
+                fontFamily: '"Helvetica Neue", Helvetica, sans-serif',
+                fontSmoothing: 'antialiased',
+                fontSize: '16px',
+                '::placeholder': {
+                    color: '#aab7c4'
+                }
+            },
+            invalid: {
+                color: '#fa755a',
+                iconColor: '#fa755a'
+            }
+        };
+
+        var card = elements.create('card', {style: style});
+        card.mount('#card-element');
+
+        card.addEventListener('change', function(event) {
+            var displayError = document.getElementById('card-errors');
+            if (event.error) {
+                displayError.textContent = event.error.message;
+            } else {
+                displayError.textContent = '';
+            }
+        });
+
+        var form = document.getElementById('payment-form');
+        form.addEventListener('submit', function(event) {
+            event.preventDefault();
+
+            stripe.createToken(card).then(function(result) {
+                if (result.error) {
+                    var errorElement = document.getElementById('card-errors');
+                    errorElement.textContent = result.error.message;
+                } else {
+                    stripeTokenHandler(result.token);
+                }
+            });
+        });
+
+        function stripeTokenHandler(token) {
+            var form = document.getElementById('payment-form');
+            var hiddenInput = document.createElement('input');
+            hiddenInput.setAttribute('type', 'hidden');
+            hiddenInput.setAttribute('name', 'stripeToken');
+            hiddenInput.setAttribute('value', token.id);
+            form.appendChild(hiddenInput);
+
+            form.submit();
+        }
+    </script>
+@endsection
+```
+
+#### 2.6 Define Routes for Stripe
+Add routes for handling Stripe payments in `web.php`.
+
+```php
+use App\Http\Controllers\StripeController;
+
+Route::get('stripe', function () {
+    return view('stripe');
+});
+Route::post('stripe', [StripeController::class, 'handlePost'])->name('stripe.post');
+```
+
+### Step 3: Configure PayPal
+#### 3.1 Add PayPal Keys to .env
+Add your PayPal API credentials to your `.env` file.
+
+```env
+PAYPAL_CLIENT_ID=your_paypal_client_id
+PAYPAL_CLIENT_SECRET=your_paypal_client_secret
+PAYPAL_MODE=sandbox  // or 'live' for production
+```
+
+#### 3.2 Update Services Configuration
+Add the PayPal configuration to the `config/services.php` file.
+
+```php
+'paypal' => [
+    'client_id' => env('PAYPAL_CLIENT_ID'),
+    'secret' => env('PAYPAL_CLIENT_SECRET'),
+    'settings' => [
+        'mode' => env('PAYPAL_MODE'),
+        'http.ConnectionTimeOut' => 30,
+        'log.LogEnabled' => true,
+        'log.FileName' => storage_path() . '/logs/paypal.log',
+        'log.LogLevel' => 'ERROR'
+    ],
+],
+```
+
+#### 3.3 Create a PayPal Controller
+Create a controller to handle PayPal payments.
+
+```php
+php artisan make:controller PayPalController
+```
+
+#### 3.4 Add PayPal Payment Logic
+Update the `PayPalController` with the payment logic.
+
+```php
+// PayPalController.php
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Srmklive\PayPal\Services\PayPal as PayPalClient;
+use Auth;
+
+class PayPalController extends Controller
+{
+    public function createPayment()
+    {
+        $provider = new PayPalClient;
+        $provider->setApiCredentials(config('services.paypal'));
+        $provider->getAccessToken();
+
+        $response = $provider->createOrder([
+            "intent" => "CAPTURE",
+            "purchase_units" => [
+                0 => [
+                    "amount" => [
+                        "currency_code" => "USD",
+                        "value" => "100.00" // Set the order amount here
+                    ]
+                ]
+            ]
+        ]);
+
+        if (isset($response['id'])) {
+            foreach ($response['links'] as $link) {
+                if ($link['rel'] === 'approve') {
+                    return redirect()->away($link['href']);
+                }
+            }
+        }
+
+        return redirect()
+            ->route('paypal.error')
+            ->with('error', 'Something went wrong.');
+    }
+
+    public function capturePayment(Request $request)
+    {
+        $provider = new PayPalClient;
+        $provider->setApiCredentials(config('services.paypal'));
+        $provider->getAccessToken();
+
+        $response = $provider->capturePaymentOrder($request['token']);
+
+        if (isset($response['status']) && $response['status'] == 'COMPLETED') {
+            // Save order to database
+
+            return redirect()
+                ->route('paypal.success')
+                ->with('success', 'Payment successful.');
+        }
+
+        return redirect()
+            ->route('paypal.error')
+            ->with('error', 'Something went wrong.');
+    }
+
+    public function success()
+    {
+        return view('paypal.success');
+    }
+
+    public function error()
+    {
+        return view('paypal.error');
+    }
+}
+```
+
+#### 3.5 Create PayPal Views
+Create Blade views for PayPal success and error pages.
+
+##### resources/views/paypal/success.blade.php
+```html
+@extends('layouts.app')
+
+@section('content')
+    <h1>Payment Successful</h1>
+    <p>Your payment was successful. Thank you!</p>
+@endsection
+```
+
+##### resources/views/paypal/error.blade.php
+```html
+@extends('layouts.app')
+
+@section('content')
+    <h1>Payment Error</h1>
+    <p>There was an error processing your payment. Please try again.</p>
+@endsection
+```
+
+#### 3.6 Define Routes for PayPal
+Add routes for handling PayPal payments in `web.php`.
+
+```php
+use App\Http\Controllers\PayPalController;
+
+Route::get('paypal/create', [PayPalController::class, 'createPayment'])->name('paypal.create');
+Route::get('paypal/capture', [PayPalController::class, 'capturePayment'])->name('paypal.capture');
+Route::get('paypal/success', [PayPalController::class, 'success'])->name('paypal.success');
+Route::get('paypal/error', [PayPalController::class, 'error'])->name('paypal.error');
+```
+
+With these steps, you've integrated both Stripe and PayPal into your Laravel application. You can now handle payments using either gateway. Adjust the payment amount and order details as needed for your specific application requirements.
